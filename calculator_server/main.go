@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"sync"
 	"syscall"
@@ -29,9 +28,9 @@ type arguments struct {
 }
 
 func main() {
-	_, filename, _, ok := runtime.Caller(0)
-	if !ok {
-		fmt.Fprintf(os.Stderr, "Failed to get source directory\n")
+	filename, err := os.Executable()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to get source directory: %s\n", err)
 	}
 	scriptDir := filepath.Dir(filename)
 
