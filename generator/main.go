@@ -33,7 +33,7 @@ func main() {
 	pflag.DurationVar(
 		&args.Interval,
 		"interval",
-		100*time.Microsecond,
+		100*time.Millisecond,
 		"pause between requests per thread (e.g. 100ms, 0.5s, 1s; 0s = as fast as possible)",
 	)
 	pflag.DurationVar(
@@ -70,5 +70,5 @@ func main() {
 	cancel()
 	wg.Wait()
 
-	fmt.Printf("Total requests: ok=%d errors=%d", stat.OK(), stat.Errors())
+	fmt.Printf("Total requests: ok=%d errors=%d\n", stat.OK(), stat.Errors())
 }
