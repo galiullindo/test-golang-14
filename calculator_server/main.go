@@ -16,6 +16,7 @@ import (
 
 	"github.com/galiullindo/test-golang-14/calculator_server/internal/handlers"
 	"github.com/galiullindo/test-golang-14/calculator_server/internal/libraries"
+	"github.com/galiullindo/test-golang-14/calculator_server/internal/metrics"
 	"github.com/spf13/pflag"
 )
 
@@ -71,25 +72,29 @@ func main() {
 	defer cLibrary.Close()
 	defer rustLibrary.Close()
 
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	calcHandler := handlers.NewCalcHandler(cLibrary, rustLibrary)
+
+	rpsCounter := metrics.NewRPSCounter(ctx)
+	metricsHandler := handlers.NewMetricsHandler(rpsCounter)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /calc", calcHandler.Post)
+	mux.HandleFunc("GET /metrics", metricsHandler.Get)
 
 	server := &http.Server{
 		Addr:    net.JoinHostPort(args.Host, strconv.Itoa(args.Port)),
-		Handler: mux,
+		Handler: metricsHandler.MakeMiddleware(mux),
 	}
 
 	wg := &sync.WaitGroup{}
 
-	printerCtx, printerCancel := context.WithCancel(context.Background())
-	defer printerCancel()
-
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		handlers.PeriodicPrinter(printerCtx, args.Interval)
+		handlers.PeriodicPrinter(ctx, args.Interval)
 	}()
 
 	fmt.Printf("Calculator server listening on %s:%d\n", args.Host, args.Port)
@@ -105,7 +110,7 @@ func main() {
 
 	fmt.Println("\nSIGINT received, shutting down...")
 	handlers.PrintTotals("final")
-	printerCancel()
+	cancel()
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), time.Second)
 	defer shutdownCancel()
