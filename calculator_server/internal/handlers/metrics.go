@@ -5,17 +5,23 @@ import (
 	"net/http"
 
 	"github.com/galiullindo/test-golang-14/calculator_server/internal/metrics"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 type MetricsHandler struct {
 	rpsCounter *metrics.RPSCounter
+	reg        prometheus.Registry
 }
 
 func NewMetricsHandler(rpsCounte *metrics.RPSCounter) *MetricsHandler {
 	return &MetricsHandler{rpsCounter: rpsCounte}
+
 }
 
 func (h *MetricsHandler) Get(w http.ResponseWriter, r *http.Request) {
+	promhttp.HandlerFor(reg, promhttp.HandlerOpts{}).ServeHTTP(w, r)
+
 	history := h.rpsCounter.History()
 
 	fmt.Fprintln(

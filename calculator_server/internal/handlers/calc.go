@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/galiullindo/test-golang-14/calculator_server/internal/libraries"
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 var (
@@ -16,6 +17,27 @@ var (
 	sumValue int64
 	subValue int64
 )
+
+var (
+	reg = prometheus.NewRegistry()
+
+	cAddFuncDuration = prometheus.NewSummary(prometheus.SummaryOpts{
+		Name:       "c_add_function_duration_seconds",
+		Help:       "Duration of C add function execution in seconds (p95, p99)",
+		Objectives: map[float64]float64{0.95: 0.005, 0.99: 0.001}, // квантили и допустимая погрешность
+	})
+
+	rustSubFuncDuration = prometheus.NewSummary(prometheus.SummaryOpts{
+		Name:       "rust_sub_function_duration_seconds",
+		Help:       "Duration of Rust sub function execution in seconds (p95, p99)",
+		Objectives: map[float64]float64{0.95: 0.005, 0.99: 0.001},
+	})
+)
+
+func init() {
+	reg.MustRegister(cAddFuncDuration)
+	reg.MustRegister(rustSubFuncDuration)
+}
 
 type CalcHandler struct {
 	cLibrary    *libraries.CLibrary
@@ -45,8 +67,13 @@ func (h *CalcHandler) Post(w http.ResponseWriter, r *http.Request) {
 	mu.Lock()
 	defer mu.Unlock()
 
+	startC := time.Now()
 	sumValue = h.cLibrary.Add(sumValue, num)
+	cAddFuncDuration.Observe(time.Since(startC).Seconds())
+
+	startRust := time.Now()
 	subValue = h.rustLibrary.Sub(subValue, num)
+	rustSubFuncDuration.Observe(time.Since(startRust).Seconds())
 
 	respond(w, http.StatusOK, []byte("ok"))
 }
