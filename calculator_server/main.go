@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -9,13 +10,14 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strconv"
-	"sync"
 	"syscall"
 	"time"
 
-	"github.com/galiullindo/test-golang-14/calculator_server/internal/handlers"
-	"github.com/galiullindo/test-golang-14/calculator_server/internal/libraries"
-	"github.com/galiullindo/test-golang-14/calculator_server/internal/metrics"
+	"github.com/galiullindo/test-golang-14/calculator_server/internal/handler"
+	"github.com/galiullindo/test-golang-14/calculator_server/internal/middleware"
+	"github.com/galiullindo/test-golang-14/calculator_server/internal/pkg"
+	"github.com/galiullindo/test-golang-14/calculator_server/internal/repository"
+	"github.com/galiullindo/test-golang-14/calculator_server/internal/service"
 	"github.com/spf13/pflag"
 )
 
@@ -62,43 +64,45 @@ func main() {
 	)
 	pflag.Parse()
 
-	cLibrary, rustLibrary, err := libraries.Load(args.CLib, args.RustLib)
+	cLib, rustLib, err := pkg.LoadLibraries(args.CLib, args.RustLib)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to load native libraries: %s\n", err)
 		fmt.Fprintf(os.Stderr, "Did you run build.sh first?\n")
 		os.Exit(1)
 	}
-	defer cLibrary.Close()
-	defer rustLibrary.Close()
+	defer cLib.Close()
+	defer rustLib.Close()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	calcHandler := handlers.NewCalcHandler(cLibrary, rustLibrary)
-
-	rpsCounter := metrics.NewRPSCounter(ctx)
-	metricsHandler := handlers.NewMetricsHandler(rpsCounter)
+	repo := repository.NewCalcRepository()
+	metrics := middleware.NewMetricsObserver(ctx)
+	serv := service.NewService(ctx, args.Interval, repo, metrics, cLib, rustLib)
+	handl := handler.NewHandler(serv)
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("POST /calc", calcHandler.Post)
-	mux.HandleFunc("GET /metrics", metricsHandler.Get)
+	mux.HandleFunc("GET /metrics", metrics.Handler)
+	handl.RegisterRoutes(mux)
 
-	server := &http.Server{
-		Addr:    net.JoinHostPort(args.Host, strconv.Itoa(args.Port)),
-		Handler: metricsHandler.MakeMiddleware(mux),
+	server := http.Server{
+		Addr:         net.JoinHostPort(args.Host, strconv.Itoa(args.Port)),
+		Handler:      metrics.Middleware(mux),
+		ReadTimeout:  10 * time.Second,
+		WriteTimeout: 10 * time.Second,
+		IdleTimeout:  60 * time.Second,
 	}
 
-	wg := &sync.WaitGroup{}
+	fmt.Printf(
+		"Calculator server listening on %s\n",
+		net.JoinHostPort(args.Host, strconv.Itoa(args.Port)),
+	)
 
-	wg.Add(1)
 	go func() {
-		defer wg.Done()
-		handlers.PeriodicPrinter(ctx, args.Interval)
-	}()
-
-	fmt.Printf("Calculator server listening on %s:%d\n", args.Host, args.Port)
-	go func() {
-		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		if err := server.ListenAndServe(); err != nil {
+			if errors.Is(err, http.ErrServerClosed) {
+				return
+			}
 			fmt.Fprintf(os.Stderr, "Filed to start server: %s\n", err)
 		}
 	}()
@@ -107,16 +111,18 @@ func main() {
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGINT)
 	<-sigChan
 
-	fmt.Println("\nSIGINT received, shutting down...")
-	handlers.PrintTotals("final")
 	cancel()
 
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), time.Second)
+	fmt.Printf("\nSIGINT received, shutting down...\n")
+	serv.PrintTotals("final")
+
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer shutdownCancel()
 
-	if err := server.Shutdown(shutdownCtx); err != nil && err != http.ErrServerClosed {
+	if err := server.Shutdown(shutdownCtx); err != nil {
+		if errors.Is(err, http.ErrServerClosed) {
+			return
+		}
 		fmt.Fprintf(os.Stderr, "Filed to shutdown server: %s\n", err)
 	}
-
-	wg.Wait()
 }
